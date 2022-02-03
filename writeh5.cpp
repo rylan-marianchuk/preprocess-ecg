@@ -1,28 +1,17 @@
 #include "hdf5.h"
 #include "writeh5.h"
-#define FILE            "h5ex_t_float.h5"
-#define DATASET         "DS1"
-#define DIM0            4
-#define DIM1            7
+#include <string>
+#include <iostream>
 
-void writeh5() {
-    hid_t file, space, dset;          /* Handles */
+void writeh5(std::string FILE, std::string DATASET, const int DIM0, const int DIM1, float (*wdata)[8][2500]) {
+    hid_t file, space, dset;
     herr_t status;
-    hsize_t dims[2] = {DIM0, DIM1};
-    double wdata[DIM0][DIM1];          /* Write buffer */
-    int ndims, i, j;
-
-    /*
-     * Initialize data.
-     */
-    for (i = 0; i < DIM0; i++)
-        for (j = 0; j < DIM1; j++)
-            wdata[i][j] = (double) i / (j + 0.5) + j;
+    hsize_t dims[2] = {(long long unsigned int)DIM0, (long long unsigned int)DIM1};
 
     /*
      * Create a new file using the default properties.
      */
-    file = H5Fcreate(FILE, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+    file = H5Fcreate(FILE.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
 
     /*
      * Create dataspace.  Setting maximum size to NULL sets the maximum
@@ -37,10 +26,10 @@ void writeh5() {
      * library automatically converts between different floating point
      * types.
      */
-    dset = H5Dcreate(file, DATASET, H5T_IEEE_F64LE, space, H5P_DEFAULT,
+    dset = H5Dcreate(file, DATASET.c_str(), H5T_IEEE_F32LE, space, H5P_DEFAULT,
                      H5P_DEFAULT, H5P_DEFAULT);
     status = H5Dwrite(dset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT,
-                      wdata[0]);
+                      (*wdata));
 
     /*
      * Close and release resources.
@@ -48,6 +37,5 @@ void writeh5() {
     status = H5Dclose(dset);
     status = H5Sclose(space);
     status = H5Fclose(file);
-
 }
 
