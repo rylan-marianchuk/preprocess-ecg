@@ -4,6 +4,7 @@
 #include <string>
 #include <filesystem>
 #include "hdf5.h"
+//#include "H5Cpp.h"
 
 namespace fs = std::filesystem;
 
@@ -11,11 +12,13 @@ namespace fs = std::filesystem;
 
 int main() {
 
-    std::string path = "/home/rylan/May_2019_XML/";
+    std::string read_path = "/home/rylan/May_2019_XML/";
+    std::string write_path = "/home/rylan/xmls_AS_h5/";
 
-    int total = 10;
-    for (const auto & entry : fs::directory_iterator(path)){
 
+    int total = 10000;
+    for (const auto & entry : fs::directory_iterator(read_path)){
+        std::cout << "Working on:\t\t" << entry.path().filename();
         pugi::xml_document doc;
         pugi::xml_parse_result result = doc.load_file(entry.path().string().c_str());
 
@@ -24,20 +27,39 @@ int main() {
             // Parsed without error
             pugi::xml_node wvfm = doc.child("RestingECG").child("Waveform").next_sibling();
             pugi::xml_node leadData = wvfm.child("LeadData");
-            int fs = std::stoi(wvfm.child("SampleBase").child_value());
+            int fs;
+
+            try{
+               fs = std::stoi(wvfm.child("SampleBase").child_value());
+            }
+            catch  (const std::exception& e) {
+                std::cout << "\t\t Error in parsing :(" << std::endl;
+                continue;
+            }
+
             const int SAMPLES = fs*10;
-            //std::cout << fs << std::endl;
-            //std::cout << SAMPLES << std::endl;
+            std::cout << "\t\tfs:  " << fs;
 
             double ecg[LEADS][SAMPLES];
+
+            bool goodToWrite = true;
 
             for (int lead = 0; lead < 8; lead++){
                 std::string b64encoded = leadData.child("WaveFormData").child_value();
 
-                if (b64encoded.empty())
-                    continue;
-                b64encoded.erase(b64encoded.size() - 11);
-                std::string DE = base64_decode(b64encoded, true);
+                if (b64encoded.empty()){
+                    goodToWrite = false;
+                    break;
+                }
+
+                size_t cutOff = b64encoded.find('=');
+                std::string DE = base64_decode(b64encoded.substr(0, cutOff), true);
+
+                if (DE.size() != 10000 && DE.size() != 5000){
+                    goodToWrite = false;
+                    break;
+                }
+
                 const char * c = DE.c_str();
 
                 for (size_t i = 0; i < DE.size(); i += 2) {
@@ -45,18 +67,22 @@ int main() {
                     ecg[lead][ind] = (double) *(int16_t *) &c[i];
                 }
 
-                //std::cout << "\n" << leadData.child("LeadID").child_value() << std::endl;
-                //for (size_t j = 0; j < fs*10; j++){
-                //    std::cout << ecg[lead][j] << "  ";
-                //}
                 leadData = leadData.next_sibling();
             }
+
+            if (!goodToWrite){
+                std::cout << "\t\t Error in parsing :(" << std::endl;
+                continue;
+            }
+
 
             // Writing the h5 file
             std::string filename = entry.path().filename();
             filename.erase(filename.size() - 4);
             filename.append(".h5");
-            std::cout << filename << std::endl;
+            std::string write_to = write_path;
+            write_to.append(filename);
+
 
             std::string dataset = "ECG";
 
@@ -64,7 +90,7 @@ int main() {
             herr_t status;
             hsize_t dims[2] = {LEADS, (long long unsigned int)SAMPLES};
 
-            file = H5Fcreate(filename.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+            file = H5Fcreate(write_to.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
 
             space = H5Screate_simple(2, dims, NULL);
 
@@ -77,10 +103,11 @@ int main() {
             status = H5Dclose(dset);
             status = H5Sclose(space);
             status = H5Fclose(file);
+            std::cout << "\t\t FINISHED! \t\t Saved:" << 10000 - total << std::endl;
         }
         else{
             // Error in parsing
-            std::cout << "Error in parsing\n";
+            std::cout << "\t\t Error in parsing :(" << std::endl;
             continue;
         }
         total--;
