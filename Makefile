@@ -1,11 +1,6 @@
 build = build/
 src = preprocess/
 
-
-#run: main.cpp writeh5.cpp writeh5.h writeSQL.cpp writeSQL.h
-	#g++ -std=gnu++17 -Ilib/pugixml-1.11/src -Ilib/b64 `pkg-config --cflags hdf5-serial` main.cpp writeh5.cpp writeSQL.cpp `pkg-config --libs hdf5-serial` -lhdf5_cpp -lsqlite3 lib/libbase64.a  -o run
-	#g++ -std=gnu++17 -Ilib/pugixml-1.11/src -Ilib/b64 main.cpp wh5.o lib/libbase64.a -o run
-
 all: PreProcess
 
 PreProcess: main.o wh5.o sqlWriting.o cudaKernel.o
@@ -25,4 +20,6 @@ cudaKernel.o: cudaExtract.cu cudaExtract.cuh
 	nvcc -dlink -o file_link.o cudaExtract.o -lcudadevrt -lcudart
 
 clean:
-	rm build/*
+	rm *.o
+	rm wvfm_params.db
+

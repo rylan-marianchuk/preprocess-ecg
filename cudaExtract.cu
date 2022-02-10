@@ -2,7 +2,26 @@
 #include <vector>
 #include <thrust/sort.h>
 #include <cstdlib>
+#include <algorithm>
+
 #include "cudaResults.h"
+
+__device__ bool hasflat20samples(float * signal, size_t NCOL){
+    float prev = signal[0];
+    short int longest = 0;
+    for (size_t i = 1; i < NCOL; i++){
+        if (signal[i] == prev)
+            longest++;
+        else
+            longest = 0;
+
+        prev = signal[i];
+
+        if (longest == 20)
+            return 1;
+    }
+    return 0;
+}
 
 __device__ float histentropy(float * signal, size_t NCOL, int bins=40){
 
@@ -13,21 +32,15 @@ __device__ float histentropy(float * signal, size_t NCOL, int bins=40){
 
     float binSize = (max - min) / bins;
     float binCount = 0;
-    //printf("Bin: [%f  %f):", min, min+binSize);
     for (size_t i = 0; i < NCOL; i++){
         if (signal[i] <= min + binSize){
             binCount++;
-            //printf(" 1 ");
         }
         else {
             float v = binCount / binSize / NCOL;
             sum += std::log2(v) * (v);
-            //printf("\n val: %f \n", binCount);
-
             binCount = 1;
             min += binSize;
-            //printf("\nBin: [%f  %f):", min, min+binSize);
-            //printf(" 1 ");
         }
     }
     float v = binCount / binSize / NCOL;
@@ -36,8 +49,18 @@ __device__ float histentropy(float * signal, size_t NCOL, int bins=40){
     return -sum;
 }
 
+__device__ float curvelength(float * signal, size_t NCOL){
+    float CL = 0;
+    for (int j = 0; j < NCOL - 1; j++) {
+        float x1 = signal[j];
+        float x2 = signal[j+1];
+        CL += std::sqrt(1.0f + (x2 - x1)*(x2 - x1));
+    }
+    return CL;
+}
 
-__global__ void CurveLength(float* ecgs, const size_t SIGNALS, const size_t NCOL,
+__global__ void GetParamsGPU(float* ecgs, const size_t SIGNALS, const size_t NCOL,
+                            bool * flat20_res,
                             float * curve_length_res,
                             float * histentropy_res) {
 
@@ -46,19 +69,28 @@ __global__ void CurveLength(float* ecgs, const size_t SIGNALS, const size_t NCOL
 
 
     while (i < SIGNALS){
-        float * signal = ecgs + i * NCOL;
+        float * signal = ecgs + (i * NCOL);
+
+        flat20_res[i] = 0;
         curve_length_res[i] = 0.0f;
         histentropy_res[i] = 0.0f;
 
+        // 20 values equal in sequence?
+        flat20_res[i] = hasflat20samples(signal, NCOL);
+
         // Curve Length
-        for (int j = 0; j < NCOL - 1; j++) {
-            float x1 = signal[j];
-            float x2 = signal[j+1];
-            curve_length_res[i] += std::sqrt(1.0f + (x2 - x1)*(x2 - x1));
-        }
+        curve_length_res[i] = curvelength(signal, NCOL);
 
         // Histogram Entropy
         histentropy_res[i] = histentropy(signal, NCOL);
+
+
+
+        //printf("Start: \t %.0f %.0f %.0f \t\tEnd: %.0f %.0f %.0f \t\t\t\t\t CL: %f \t\t HE: %f \n", signal[0], signal[1], signal[2], signal[4997],
+        //       signal[4998], signal[4999], curve_length_res[i], histentropy_res[i]);
+
+        //printf("Start: \t %.0f %.0f %.0f \t\tEnd: %.0f %.0f %.0f\n", signal[0], signal[1], signal[2], signal[4997],
+        //       signal[4998], signal[4999]);
 
         i += stride;
     }
@@ -66,17 +98,22 @@ __global__ void CurveLength(float* ecgs, const size_t SIGNALS, const size_t NCOL
 
 }
 
-cudaResults getArtifactParams(float * ecgs, dim3 blocksPerGrid, dim3 threadsPerBlock, const size_t SIGNALS, const size_t NCOL){
+cudaResults getArtifactParams(float * ecgs, const size_t SIGNALS, const size_t NCOL){
 
-    struct cudaResults resP;
+    cudaError_t err = cudaDeviceSetLimit(cudaLimitMallocHeapSize, 1048576ULL*1024);
+
+    cudaResults resP;
 
     size_t byte_amount_res = sizeof(float) * SIGNALS;
 
+    resP.res20flat = (bool *)malloc(sizeof(bool) * SIGNALS );
     resP.resCL = (float*)malloc(byte_amount_res);
     resP.resHE = (float*)malloc(byte_amount_res);
 
+    bool* d_res20flat;
     float* d_resCL;
     float* d_resHE;
+    cudaMalloc(&d_res20flat, sizeof(bool) * SIGNALS );
     cudaMalloc(&d_resCL, byte_amount_res);
     cudaMalloc(&d_resHE, byte_amount_res);
 
@@ -84,55 +121,26 @@ cudaResults getArtifactParams(float * ecgs, dim3 blocksPerGrid, dim3 threadsPerB
     cudaMalloc(&d_ecgs, sizeof(float) * SIGNALS * NCOL);
     cudaMemcpy(d_ecgs, ecgs, sizeof(float) * SIGNALS * NCOL, cudaMemcpyHostToDevice);
 
+    const unsigned tpb_x = 256;
+    const unsigned bpg_x = (SIGNALS + tpb_x - 1) / tpb_x;
+    dim3 blocksPerGrid(bpg_x, 1, 1);
+    dim3 threadsPerBlock(tpb_x, 1, 1);
 
-    CurveLength<<<blocksPerGrid, threadsPerBlock>>>(d_ecgs, SIGNALS, NCOL, d_resCL, d_resHE);
+    GetParamsGPU<<<blocksPerGrid, threadsPerBlock>>>(d_ecgs, SIGNALS, NCOL, d_res20flat,
+                                                     d_resCL, d_resHE);
 
     // Wait for gpu to finish
     cudaDeviceSynchronize();
 
+    cudaMemcpy(resP.res20flat, d_res20flat, sizeof(bool) * SIGNALS, cudaMemcpyDeviceToHost);
     cudaMemcpy(resP.resCL, d_resCL, byte_amount_res, cudaMemcpyDeviceToHost);
     cudaMemcpy(resP.resHE, d_resHE, byte_amount_res, cudaMemcpyDeviceToHost);
 
-
+    cudaFree(d_res20flat);
     cudaFree(d_resCL);
     cudaFree(d_resHE);
     cudaFree(d_ecgs);
 
 
     return resP;
-}
-
-#define SIGNALS 40000
-#define NUM_COLS 5000
-
-int run(){
-    cudaError_t err = cudaDeviceSetLimit(cudaLimitMallocHeapSize, 1048576ULL*1024);
-    bool showOutput = true;
-
-    float * ecgs = new float[SIGNALS*NUM_COLS];
-
-    for (size_t i = 0; i < SIGNALS; i++){
-        for (size_t j = 0; j < NUM_COLS; j++){
-            //ecgs[i * NUM_COLS + j] = (float) (i*(NUM_COLS) + j);
-            ecgs[i * NUM_COLS + j] = (float) (rand() % 1000);
-        }
-    }
-
-
-    const unsigned tpb_x = 256;
-    const unsigned bpg_x = (SIGNALS + tpb_x - 1) / tpb_x;
-    dim3 blocksperGrid(bpg_x, 1, 1);
-    dim3 threadsPerBlock(tpb_x, 1, 1);
-
-    cudaResults res = getArtifactParams(ecgs, blocksperGrid, threadsPerBlock, SIGNALS, NUM_COLS);
-
-    if (showOutput){
-        std::cout << "CL" << "\t\t\t" << "HE" << std::endl;
-        for (size_t i = 0; i < SIGNALS; i++){
-            std::cout << res.resCL[i] << "\t\t" << res.resHE[i] << std::endl;
-        }
-    }
-
-    return 0;
-
 }

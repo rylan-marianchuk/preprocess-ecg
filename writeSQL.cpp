@@ -6,18 +6,20 @@ int createArtifactDB()
 {
     sqlite3* DB;
     int exit = 0;
-    exit = sqlite3_open("ecgArtifact.db", &DB);
+    exit = sqlite3_open("wvfm_params.db", &DB);
 
     if (exit) {
         std::cerr << "Error open DB " << sqlite3_errmsg(DB) << std::endl;
         return -1;
     }
 
-    std::string create_table = "CREATE TABLE FEATURES( "
+    std::string create_table = "CREATE TABLE wvfm_params( "
                                "ID          TEXT PRIMARY KEY, "
                                "LEAD        INT, "
+                               "NOCHANGE20  INT, "
                                "CURVELENGTH REAL,"
-                               "HISTENTROPY REAL );";
+                               "HISTENTROPY REAL,"
+                               "SEGAUTOCORR REAL );";
 
     char* messageError;
     exit = sqlite3_exec(DB, create_table.c_str(), NULL, 0, &messageError);
@@ -33,10 +35,10 @@ int createArtifactDB()
 }
 
 
-int writeCudaOutput(cudaResults results, std::vector<std::string> filenames, int BATCH_SIZE){
+int writeCudaOutput(cudaResults results, std::vector<std::string> filenames, int BATCH_SIZE, const int LEADS){
     sqlite3* DB;
     int exit = 0;
-    exit = sqlite3_open("ecgArtifact.db", &DB);
+    exit = sqlite3_open("wvfm_params.db", &DB);
 
     if (exit) {
         std::cerr << "Error open DB " << sqlite3_errmsg(DB) << std::endl;
@@ -44,12 +46,16 @@ int writeCudaOutput(cudaResults results, std::vector<std::string> filenames, int
     }
 
     for (int i = 0; i < BATCH_SIZE; i++){
-        for (int lead = 0; lead < 8; lead++){
-            std::string row = "INSERT INTO FEATURES VALUES("
-                    + filenames[i]                                       + " "
-                    + std::to_string(lead)                            + " "
-                    + std::to_string(results.resCL[i + lead])          + " "
-                    + std::to_string(results.resHE[i + lead])          + ");";
+        for (int lead = 0; lead < LEADS; lead++){
+            std::string K = filenames[i].substr(0, filenames[i].size() - 3) + std::to_string(lead);
+            std::string row = "INSERT INTO 'wvfm_params' VALUES('"
+                    + K                                                   + "', '"
+                    + std::to_string(lead)                             + "', '"
+                    + std::to_string(results.res20flat[(i*LEADS) + lead])      + "', '"
+                    + std::to_string(results.resCL[(i*LEADS) + lead])          + "', '"
+                    + std::to_string(results.resHE[(i*LEADS) + lead])          + "', 'NULL');";
+
+            //std::cout << "Attempting to write " << row << std::endl;
 
             char* messageError;
             exit = sqlite3_exec(DB, row.c_str(), NULL, 0, &messageError);
@@ -57,10 +63,11 @@ int writeCudaOutput(cudaResults results, std::vector<std::string> filenames, int
                 std::cerr << "Error inserting into DB " << sqlite3_errmsg(DB) << std::endl;
                 return -1;
             }
+            //std::cout << "Successfully wrote " << filenames[i] << std::endl;
         }
     }
 
-    std::cout << "Successfully wrote to DB " << sqlite3_errmsg(DB) << std::endl;
+    std::cout << "Successfully wrote batch to DB " << sqlite3_errmsg(DB) << std::endl;
     return 0;
 }
 
