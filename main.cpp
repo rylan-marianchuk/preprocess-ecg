@@ -3,17 +3,54 @@
 #include <filesystem>
 #include <vector>
 #include <fstream>
+#include <chrono>
+#include <variant>
 
 #include "pugixml.hpp"
 #include "base64.h"
 #include "writeh5.h"
+#include "sqlite_wrapper.h"
 #include "cudaExtract.cuh"
-#include "writeSQL.h"
 
 #define LEADS 8
 #define SAMPLES 5000
 
 namespace fs = std::filesystem;
+
+void writeBatch(std::vector<std::string> filename_vector, float * ecgs, SqliteWrapper& wvfmDB){
+    // Get & write the parameters from CUDA
+    const int B_SIZE = filename_vector.size();
+
+    std::string * euids = new std::string[B_SIZE*LEADS];
+    int * lead_ids = new int[B_SIZE*LEADS];
+
+    for (int i = 0; i < B_SIZE; i++){
+        std::string filename = filename_vector[i].substr(0, filename_vector[i].size() - 3);
+        for (int lead = 0; lead < LEADS; lead++){
+            euids[i*LEADS + lead] = filename + std::to_string(lead);
+            lead_ids[i*LEADS + lead] = lead;
+        }
+    }
+
+    cudaResults res = getArtifactParams(ecgs, B_SIZE*LEADS, SAMPLES);
+    std::vector<std::variant<int*, double*, std::string*>> insert_arrays {
+            euids,
+            lead_ids,
+            res.res20flat,
+            res.resCL,
+            res.resHE
+    };
+    /*int sqlWrite = writeCudaOutput(res, filename_vector, BATCH_SIZE, LEADS);
+
+    if (sqlWrite == -1){
+        std::cout << "Error writing SQL D:" << std::endl;
+        return -1;
+    }*/
+    wvfmDB.BatchInsert("wvfm_params", insert_arrays, B_SIZE*LEADS);
+
+    delete[] euids;
+    delete[] lead_ids;
+}
 
 
 int main(int argc, char *argv[]) {
@@ -28,7 +65,8 @@ int main(int argc, char *argv[]) {
     std::string write_path = argv[2];
     const int MAX_XMLS = std::atoi(argv[3]);
 
-    const int BATCH_SIZE = 128;
+    //const int BATCH_SIZE = 256;
+    const int BATCH_SIZE = 2048;
 
     const int ECG_BUFFER_LEN = LEADS*SAMPLES;
 
@@ -41,7 +79,17 @@ int main(int argc, char *argv[]) {
 
     std::ofstream unparsable ("unparsable.txt");
 
-    int init = createArtifactDB();
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    //int init = createArtifactDB();
+    SqliteWrapper wvfmDB = SqliteWrapper("wvfmWrapped.db");
+    std::vector<std::pair<std::string, std::string>> column_desc {
+            {"EUID", "TEXT PRIMARY KEY"},
+            {"LEAD", "INT"},
+            {"NOCHANGE20", "INT"},
+            {"CURVELENGTH", "REAL"},
+            {"HISTENTROPY", "REAL"}
+    };
+    wvfmDB.CreateTable("wvfm_params", column_desc);
 
     for (const auto & entry : fs::directory_iterator(read_path)){
 
@@ -96,7 +144,6 @@ int main(int argc, char *argv[]) {
                 std::cout << entry.path().filename() << std::endl;
                 continue;
             }
-
         }
         else{
             // Error in parsing
@@ -111,16 +158,7 @@ int main(int argc, char *argv[]) {
         completed_batch++;
         completed_total++;
         if (completed_batch == BATCH_SIZE){
-            // Get & write the parameters from CUDA
-            cudaResults res = getArtifactParams(ecgs, BATCH_SIZE*LEADS, SAMPLES);
-
-            int sqlWrite = writeCudaOutput(res, filename_vector, BATCH_SIZE, LEADS);
-
-            if (sqlWrite == -1){
-                std::cout << "Error writing SQL D:" << std::endl;
-                return -1;
-            }
-
+            writeBatch(filename_vector, ecgs, wvfmDB);
             filename_vector.clear();
             completed_batch = 0;
         }
@@ -128,14 +166,16 @@ int main(int argc, char *argv[]) {
     }
 
     if (!filename_vector.empty()){
-        // Get & write the parameters from CUDA
-        cudaResults res = getArtifactParams(ecgs, filename_vector.size()*LEADS, SAMPLES);
-
-        int sqlWrite = writeCudaOutput(res, filename_vector, filename_vector.size(), LEADS);
+        writeBatch(filename_vector, ecgs, wvfmDB);
     }
 
     delete[] ecgs;
     unparsable.close();
+    wvfmDB.CloseDB();
+    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    std::cout << "TIME: " << std::chrono::duration_cast<std::chrono::seconds>(end - start).count() << " seconds" << std::endl;
     return 0;
 }
+
+
 
