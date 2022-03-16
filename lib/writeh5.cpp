@@ -1,5 +1,5 @@
 #include "hdf5.h"
-#include "writeh5.h"
+#include "../include/writeh5.h"
 #include "H5Cpp.h"
 #include <string>
 #include <iostream>

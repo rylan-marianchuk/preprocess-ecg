@@ -8,16 +8,21 @@
 
 #include "pugixml.hpp"
 #include "base64.h"
-#include "writeh5.h"
-#include "sqlite_wrapper.h"
-#include "cudaExtract.cuh"
+#include "include/writeh5.h"
+#include "include/sqlite_wrapper.h"
+#include "include/cudaExtract.cuh"
 
 #define LEADS 8
 #define SAMPLES 5000
 
 namespace fs = std::filesystem;
 
+
 void writeBatch(std::vector<std::string> filename_vector, float * ecgs, SqliteWrapper& wvfmDB){
+    /*
+     *
+     *
+     */
     // Get & write the parameters from CUDA
     const int B_SIZE = filename_vector.size();
 
@@ -40,12 +45,7 @@ void writeBatch(std::vector<std::string> filename_vector, float * ecgs, SqliteWr
             res.resCL,
             res.resHE
     };
-    /*int sqlWrite = writeCudaOutput(res, filename_vector, BATCH_SIZE, LEADS);
 
-    if (sqlWrite == -1){
-        std::cout << "Error writing SQL D:" << std::endl;
-        return -1;
-    }*/
     wvfmDB.BatchInsert("wvfm_params", insert_arrays, B_SIZE*LEADS);
 
     delete[] euids;
@@ -81,7 +81,7 @@ int main(int argc, char *argv[]) {
 
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
     //int init = createArtifactDB();
-    SqliteWrapper wvfmDB = SqliteWrapper("wvfmWrapped.db");
+    SqliteWrapper wvfmDB = SqliteWrapper("database/wvfmWrapped.db");
     std::vector<std::pair<std::string, std::string>> column_desc {
             {"EUID", "TEXT PRIMARY KEY"},
             {"LEAD", "INT"},

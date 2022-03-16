@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <chrono>
 
-#include "cudaResults.h"
+#include "../include/cudaResults.h"
 
 __device__ int hasflat20samples(float * signal, size_t NCOL){
     float prev = signal[0];
